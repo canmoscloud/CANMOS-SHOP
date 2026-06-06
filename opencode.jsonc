@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "anthropic/claude-sonnet-4-6",
+  "default_agent": "general",
+  "permission": {
+    "skill": {
+      "cerebro-vault": "allow",
+      "karpathy-guidelines": "allow"
+    },
+    "bash": {
+      "flutter *": "allow",
+      "dart *": "allow",
+      "supabase *": "allow",
+      "git *": "allow",
+      "*": "ask"
+    }
+  },
+  "skills": {
+    "paths": [
+      "C:\\Users\\Maninho\\.config\\opencode\\skills"
+    ]
+  }
+}
