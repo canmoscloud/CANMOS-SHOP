@@ -1,16 +1,13 @@
 -- CANMOS-SHOP: Database Schema
 -- Migration 001: Initial schema
 
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
 -- ============================================
 -- TABLES
 -- ============================================
 
 -- EMPRESAS (companies/multi-tenant)
 CREATE TABLE empresas (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   nome VARCHAR(255) NOT NULL,
   cnpj VARCHAR(18) UNIQUE,
   telefone VARCHAR(20),
@@ -34,7 +31,7 @@ CREATE TABLE usuarios (
 
 -- PLANOS (free/premium)
 CREATE TABLE planos (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   nome VARCHAR(50) NOT NULL UNIQUE,
   limite_produtos INTEGER NOT NULL,
   limite_vendas INTEGER NOT NULL,
@@ -46,7 +43,7 @@ CREATE TABLE planos (
 
 -- ASSINATURAS (empresa <> plano)
 CREATE TABLE assinaturas (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   empresa_id UUID NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
   plano_id UUID NOT NULL REFERENCES planos(id) ON DELETE CASCADE,
   stripe_subscription_id VARCHAR(255),
@@ -59,7 +56,7 @@ CREATE TABLE assinaturas (
 
 -- CATEGORIAS
 CREATE TABLE categorias (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   empresa_id UUID NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
   nome VARCHAR(100) NOT NULL,
   cor VARCHAR(7) DEFAULT '#6B7280',
@@ -70,7 +67,7 @@ CREATE TABLE categorias (
 
 -- PRODUTOS
 CREATE TABLE produtos (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   empresa_id UUID NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
   categoria_id UUID REFERENCES categorias(id) ON DELETE SET NULL,
   nome VARCHAR(255) NOT NULL,
@@ -87,9 +84,25 @@ CREATE INDEX idx_produtos_empresa ON produtos(empresa_id);
 CREATE INDEX idx_produtos_categoria ON produtos(categoria_id);
 CREATE INDEX idx_produtos_ativo ON produtos(ativo);
 
+-- CAIXA (abertura/fechamento)
+CREATE TABLE caixa (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  empresa_id UUID NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
+  usuario_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  valor_abertura DECIMAL(10,2) NOT NULL DEFAULT 0,
+  valor_fechamento DECIMAL(10,2),
+  saldo_esperado DECIMAL(10,2),
+  saldo_real DECIMAL(10,2),
+  diferenca DECIMAL(10,2),
+  observacao TEXT,
+  data_abertura TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  data_fechamento TIMESTAMPTZ,
+  status VARCHAR(20) NOT NULL DEFAULT 'aberto' CHECK (status IN ('aberto', 'fechado'))
+);
+
 -- VENDAS
 CREATE TABLE vendas (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   empresa_id UUID NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
   usuario_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
   caixa_id UUID REFERENCES caixa(id),
@@ -108,7 +121,7 @@ CREATE INDEX idx_vendas_caixa ON vendas(caixa_id);
 
 -- ITENS_VENDA
 CREATE TABLE itens_venda (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   venda_id UUID NOT NULL REFERENCES vendas(id) ON DELETE CASCADE,
   produto_id UUID NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
   quantidade INTEGER NOT NULL CHECK (quantidade > 0),
@@ -122,7 +135,7 @@ CREATE INDEX idx_itens_produto ON itens_venda(produto_id);
 
 -- PAGAMENTOS
 CREATE TABLE pagamentos (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   venda_id UUID NOT NULL REFERENCES vendas(id) ON DELETE CASCADE,
   forma_pagamento VARCHAR(20) NOT NULL CHECK (forma_pagamento IN ('cartao_credito', 'cartao_debito', 'pix', 'dinheiro')),
   valor DECIMAL(10,2) NOT NULL CHECK (valor > 0),
@@ -139,28 +152,12 @@ CREATE TABLE pagamentos (
 
 CREATE INDEX idx_pagamentos_venda ON pagamentos(venda_id);
 
--- CAIXA (abertura/fechamento)
-CREATE TABLE caixa (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  empresa_id UUID NOT NULL REFERENCES empresas(id) ON DELETE CASCADE,
-  usuario_id UUID NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
-  valor_abertura DECIMAL(10,2) NOT NULL DEFAULT 0,
-  valor_fechamento DECIMAL(10,2),
-  saldo_esperado DECIMAL(10,2),
-  saldo_real DECIMAL(10,2),
-  diferenca DECIMAL(10,2),
-  observacao TEXT,
-  data_abertura TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  data_fechamento TIMESTAMPTZ,
-  status VARCHAR(20) NOT NULL DEFAULT 'aberto' CHECK (status IN ('aberto', 'fechado'))
-);
-
 CREATE INDEX idx_caixa_empresa ON caixa(empresa_id);
 CREATE INDEX idx_caixa_usuario ON caixa(usuario_id);
 
 -- LOGS (segurança e transações)
 CREATE TABLE logs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   empresa_id UUID REFERENCES empresas(id) ON DELETE CASCADE,
   usuario_id UUID REFERENCES usuarios(id) ON DELETE CASCADE,
   acao VARCHAR(50) NOT NULL,
