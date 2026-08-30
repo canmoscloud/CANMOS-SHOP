@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/caixa_service.dart';
-import '../../core/services/venda_service.dart';
 import '../../core/theme/app_theme.dart';
 
 class CashierScreen extends StatefulWidget {
@@ -13,8 +12,6 @@ class CashierScreen extends StatefulWidget {
 }
 
 class _CashierScreenState extends State<CashierScreen> {
-  final _caixaService = CaixaService();
-
   @override
   void initState() {
     super.initState();
@@ -24,7 +21,7 @@ class _CashierScreenState extends State<CashierScreen> {
   Future<void> _verificarCaixa() async {
     final auth = context.read<AuthService>();
     if (auth.empresaId != null) {
-      await _caixaService.verificarCaixaAberto(auth.empresaId!);
+      context.read<CaixaService>().verificarCaixaAberto(auth.empresaId!);
     }
   }
 
@@ -44,11 +41,12 @@ class _CashierScreenState extends State<CashierScreen> {
           ElevatedButton(
             onPressed: () async {
               final auth = context.read<AuthService>();
-              final error = await _caixaService.abrirCaixa(
+              final error = await context.read<CaixaService>().abrirCaixa(
                 empresaId: auth.empresaId!,
                 usuarioId: auth.user!.id,
                 valorAbertura: double.tryParse(valorCtrl.text) ?? 0,
               );
+              if (!context.mounted) return;
               Navigator.pop(ctx);
               if (error != null && mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -66,6 +64,7 @@ class _CashierScreenState extends State<CashierScreen> {
   void _fecharCaixa() {
     final saldoEsperadoCtrl = TextEditingController();
     final saldoRealCtrl = TextEditingController();
+    final caixaService = context.read<CaixaService>();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -90,11 +89,12 @@ class _CashierScreenState extends State<CashierScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
           ElevatedButton(
             onPressed: () async {
-              final error = await _caixaService.fecharCaixa(
-                caixaId: _caixaService.caixaAtual!.id,
+              final error = await caixaService.fecharCaixa(
+                caixaId: caixaService.caixaAtual!.id,
                 saldoEsperado: double.tryParse(saldoEsperadoCtrl.text) ?? 0,
                 saldoReal: double.tryParse(saldoRealCtrl.text) ?? 0,
               );
+              if (!context.mounted) return;
               Navigator.pop(ctx);
               if (error != null && mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
@@ -111,7 +111,7 @@ class _CashierScreenState extends State<CashierScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final caixa = _caixaService.caixaAtual;
+    final caixa = context.watch<CaixaService>().caixaAtual;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Controle de Caixa')),
@@ -119,7 +119,6 @@ class _CashierScreenState extends State<CashierScreen> {
         padding: const EdgeInsets.all(24),
         child: Column(
           children: [
-            // Status card
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(24),
@@ -145,8 +144,6 @@ class _CashierScreenState extends State<CashierScreen> {
               ),
             ),
             const SizedBox(height: 24),
-
-            // Actions
             SizedBox(
               width: double.infinity,
               height: 52,

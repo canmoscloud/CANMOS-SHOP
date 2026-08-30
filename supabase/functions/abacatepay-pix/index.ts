@@ -56,14 +56,13 @@ serve(async (req) => {
 
     const pixData = await pixResponse.json();
 
-    await supabase.from("pagamentos").insert({
-      venda_id,
-      forma_pagamento: "pix",
-      valor,
-      status: "pendente",
-      abacatepay_cobranca_id: pixData.id,
-      pix_qr_code: pixData.qr_code,
-      pix_qr_code_texto: pixData.qr_code_text,
+    await supabase.from("logs").insert({
+      empresa_id: usuario.data.empresa_id,
+      usuario_id: user.id,
+      acao: "pix_criado",
+      entidade: "vendas",
+      entidade_id: venda_id,
+      detalhes: { cobranca_id: pixData.id, valor },
     });
 
     return new Response(

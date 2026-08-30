@@ -53,7 +53,7 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.shopping_cart, size: 80, color: AppTheme.primary),
+                  const Icon(Icons.shopping_cart, size: 80, color: AppTheme.primary),
                   const SizedBox(height: 16),
                   Text('CANMOS-SHOP', style: Theme.of(context).textTheme.headlineLarge?.copyWith(
                     fontWeight: FontWeight.bold, color: AppTheme.primary,
@@ -68,7 +68,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       padding: const EdgeInsets.all(12),
                       margin: const EdgeInsets.only(bottom: 16),
                       decoration: BoxDecoration(
-                        color: AppTheme.error.withOpacity(0.1),
+                        color: AppTheme.error.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(_error!, style: const TextStyle(color: AppTheme.error)),

@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
 import '../../core/models/produto.dart';
-import '../../core/models/venda.dart' as venda_models;
 import '../../core/services/auth_service.dart';
+import '../../core/services/caixa_service.dart';
 import '../../core/services/produto_service.dart';
-import '../../core/services/venda_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../payment/payment_screen.dart';
 
@@ -19,10 +19,10 @@ class PdvScreen extends StatefulWidget {
 class _PdvScreenState extends State<PdvScreen> {
   final _searchCtrl = TextEditingController();
   final _carrinho = <Map<String, dynamic>>[];
-  final _vendaService = VendaService();
   String? _categoriaFiltro;
   String _searchQuery = '';
   Timer? _debounce;
+  double _desconto = 0;
 
   @override
   void initState() {
@@ -81,13 +81,113 @@ class _PdvScreenState extends State<PdvScreen> {
 
   void _finalizarVenda() {
     if (_carrinho.isEmpty) return;
+
+    // Verificar se há caixa aberto
+    final caixaService = context.read<CaixaService>();
+    if (caixaService.caixaAtual == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Abra o caixa antes de realizar vendas'),
+          backgroundColor: AppTheme.warning,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => PaymentScreen(
           itens: List.from(_carrinho),
           total: _totalCarrinho,
+          desconto: _desconto,
         ),
+      ),
+    );
+  }
+
+  void _abrirScanner() {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        child: SizedBox(
+          height: 400,
+          child: Column(
+            children: [
+              AppBar(
+                title: const Text('Escaneie o Código de Barras'),
+                automaticallyImplyLeading: false,
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+              Expanded(
+                child: MobileScanner(
+                  onDetect: (capture) {
+                    final barcode = capture.barcodes.firstOrNull;
+                    if (barcode?.rawValue != null) {
+                      Navigator.pop(ctx);
+                      _buscarPorCodigoBarras(barcode!.rawValue!);
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _buscarPorCodigoBarras(String codigo) async {
+    final auth = context.read<AuthService>();
+    if (auth.empresaId == null) return;
+    final produtoService = context.read<ProdutoService>();
+    final produtos = await produtoService.buscarProdutos(
+      auth.empresaId!,
+      query: codigo,
+    );
+
+    if (produtos.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Produto não encontrado'), backgroundColor: AppTheme.warning),
+        );
+      }
+      return;
+    }
+
+    _adicionarAoCarrinho(produtos.first);
+  }
+
+  void _mostrarDialogoDesconto() {
+    final ctrl = TextEditingController(text: _desconto.toStringAsFixed(2));
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Desconto'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(labelText: 'Valor do Desconto (R\$)'),
+          keyboardType: TextInputType.number,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          ElevatedButton(
+            onPressed: () {
+              setState(() {
+                _desconto = double.tryParse(ctrl.text)?.clamp(0, _totalCarrinho) ?? 0;
+              });
+              Navigator.pop(ctx);
+            },
+            child: const Text('Aplicar'),
+          ),
+        ],
       ),
     );
   }
@@ -100,13 +200,18 @@ class _PdvScreenState extends State<PdvScreen> {
       appBar: AppBar(
         title: const Text('PDV - Venda Rápida'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.qr_code_scanner),
+            onPressed: _abrirScanner,
+            tooltip: 'Escaneie código de barras',
+          ),
           if (_carrinho.isNotEmpty)
             Center(
               child: Container(
                 margin: const EdgeInsets.only(right: 12),
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
+                  color: Colors.white.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text('${_carrinho.length} itens', style: const TextStyle(fontSize: 12)),
@@ -116,7 +221,6 @@ class _PdvScreenState extends State<PdvScreen> {
       ),
       body: Column(
         children: [
-          // Search
           Padding(
             padding: const EdgeInsets.all(12),
             child: TextField(
@@ -143,7 +247,6 @@ class _PdvScreenState extends State<PdvScreen> {
             ),
           ),
 
-          // Category filter
           SizedBox(
             height: 40,
             child: ListView(
@@ -157,11 +260,9 @@ class _PdvScreenState extends State<PdvScreen> {
           ),
           const SizedBox(height: 8),
 
-          // Products grid + cart
           Expanded(
             child: Row(
               children: [
-                // Products
                 Expanded(
                   flex: 3,
                   child: produtoService.loading
@@ -169,14 +270,13 @@ class _PdvScreenState extends State<PdvScreen> {
                       : _buildProdutosGrid(produtoService),
                 ),
 
-                // Cart sidebar
                 Container(
                   width: 280,
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: Theme.of(context).cardColor,
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
+                        color: Colors.black.withValues(alpha: 0.05),
                         blurRadius: 4,
                         offset: const Offset(-2, 0),
                       ),
@@ -214,7 +314,8 @@ class _PdvScreenState extends State<PdvScreen> {
     }
     if (_searchQuery.isNotEmpty) {
       produtos = produtos.where((p) =>
-          p.nome.toLowerCase().contains(_searchQuery.toLowerCase())).toList();
+          p.nome.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          (p.codigoBarras?.toLowerCase().contains(_searchQuery.toLowerCase()) ?? false)).toList();
     }
 
     if (produtos.isEmpty) {
@@ -257,7 +358,7 @@ class _PdvScreenState extends State<PdvScreen> {
               Container(
                 height: 60, width: 60,
                 decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.1),
+                  color: AppTheme.primary.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: produto.imagemUrl != null
@@ -284,9 +385,10 @@ class _PdvScreenState extends State<PdvScreen> {
   Widget _defaultIcon() => const Icon(Icons.inventory_2, size: 32, color: AppTheme.primary);
 
   Widget _buildCarrinho() {
+    final totalComDesconto = _totalCarrinho - _desconto;
+
     return Column(
       children: [
-        // Header
         Container(
           padding: const EdgeInsets.all(16),
           decoration: const BoxDecoration(
@@ -300,14 +402,16 @@ class _PdvScreenState extends State<PdvScreen> {
               const Spacer(),
               if (_carrinho.isNotEmpty)
                 GestureDetector(
-                  onTap: () => setState(() => _carrinho.clear()),
+                  onTap: () => setState(() {
+                    _carrinho.clear();
+                    _desconto = 0;
+                  }),
                   child: const Text('Limpar', style: TextStyle(color: AppTheme.error, fontSize: 12)),
                 ),
             ],
           ),
         ),
 
-        // Items
         Expanded(
           child: _carrinho.isEmpty
               ? const Center(
@@ -358,7 +462,6 @@ class _PdvScreenState extends State<PdvScreen> {
                 ),
         ),
 
-        // Total + Finalizar
         Container(
           padding: const EdgeInsets.all(16),
           decoration: const BoxDecoration(
@@ -369,8 +472,34 @@ class _PdvScreenState extends State<PdvScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('Total:', style: TextStyle(fontSize: 16)),
+                  const Text('Subtotal:', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
                   Text('R\$ ${_totalCarrinho.toStringAsFixed(2)}',
+                      style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                ],
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  GestureDetector(
+                    onTap: _mostrarDialogoDesconto,
+                    child: const Row(
+                      children: [
+                        Text('Desconto:', style: TextStyle(fontSize: 13, color: AppTheme.warning)),
+                        SizedBox(width: 4),
+                        Icon(Icons.edit, size: 14, color: AppTheme.warning),
+                      ],
+                    ),
+                  ),
+                  Text('-R\$ ${_desconto.toStringAsFixed(2)}',
+                      style: const TextStyle(fontSize: 13, color: AppTheme.warning)),
+                ],
+              ),
+              const Divider(),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Total:', style: TextStyle(fontSize: 16)),
+                  Text('R\$ ${totalComDesconto.toStringAsFixed(2)}',
                       style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppTheme.success)),
                 ],
               ),

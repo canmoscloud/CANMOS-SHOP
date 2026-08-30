@@ -9,7 +9,7 @@ class SupabaseService {
   static Future<void> initialize() async {
     await Supabase.initialize(
       url: EnvConfig().supabaseUrl,
-      anonKey: EnvConfig().supabaseAnonKey,
+      publishableKey: EnvConfig().supabaseAnonKey,
     );
   }
 
@@ -17,5 +17,10 @@ class SupabaseService {
 
   GoTrueClient get auth => client.auth;
 
-  StorageClient get storage => client.storage;
+  StorageFileApi storageFrom(String bucket) => client.storage.from(bucket);
+
+  Future<String> getAccessToken() async {
+    final session = auth.currentSession;
+    return session?.accessToken ?? '';
+  }
 }

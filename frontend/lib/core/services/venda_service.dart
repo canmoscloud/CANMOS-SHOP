@@ -5,36 +5,37 @@ import 'supabase_service.dart';
 class VendaService extends ChangeNotifier {
   final SupabaseService _supabase = SupabaseService();
 
+  /// Cria a venda via RPC. O servidor deriva usuário/empresa da sessão,
+  /// recalcula os preços a partir da tabela de produtos e vincula ao caixa
+  /// aberto — itens carregam apenas produto_id e quantidade.
   Future<Map<String, dynamic>> criarVenda({
-    required String empresaId,
-    required String usuarioId,
-    String? caixaId,
-    required double valorTotal,
     double desconto = 0,
     required List<Map<String, dynamic>> itens,
   }) async {
     final response = await _supabase.client.rpc('criar_venda', params: {
-      'p_empresa_id': empresaId,
-      'p_usuario_id': usuarioId,
-      'p_caixa_id': caixaId,
-      'p_valor_total': valorTotal,
-      'p_desconto': desconto,
       'p_itens': itens,
+      'p_desconto': desconto,
     });
-    return response as Map<String, dynamic>;
+    if (response == null || response is! Map) {
+      throw Exception('Erro ao criar venda: resposta inválida');
+    }
+    return Map<String, dynamic>.from(response);
   }
 
   Future<List<Venda>> listarVendas(String empresaId, {DateTime? inicio, DateTime? fim}) async {
     var query = _supabase.client
         .from('vendas')
         .select('*, itens_venda(*, produtos(*)), pagamentos(*), usuarios(nome)')
-        .eq('empresa_id', empresaId)
-        .order('created_at', ascending: false);
+        .eq('empresa_id', empresaId);
 
-    if (inicio != null) query = query.gte('created_at', inicio.toIso8601String());
-    if (fim != null) query = query.lte('created_at', fim.toIso8601String());
+    if (inicio != null) {
+      query = query.gte('created_at', inicio.toIso8601String());
+    }
+    if (fim != null) {
+      query = query.lte('created_at', fim.toIso8601String());
+    }
 
-    final response = await query;
+    final response = await query.order('created_at', ascending: false);
     return (response as List).map((e) => Venda.fromJson(e)).toList();
   }
 
@@ -43,6 +44,7 @@ class VendaService extends ChangeNotifier {
         .from('vendas')
         .update({'status': 'cancelada'})
         .eq('id', vendaId);
+    notifyListeners();
   }
 
   Future<Map<String, double>> getResumoVendas(String empresaId, {required DateTime inicio, required DateTime fim}) async {

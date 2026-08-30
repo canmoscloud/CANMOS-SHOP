@@ -11,6 +11,11 @@ frontend/android/local.properties
 frontend/android/key.properties
 frontend/.metadata
 
+# Flutter - arquivos gerados com caminhos absolutos da máquina local
+frontend/ios/Flutter/Generated.xcconfig
+frontend/ios/Flutter/flutter_export_environment.sh
+frontend/ios/Flutter/ephemeral/
+
 # IDE
 .idea/
 .vscode/

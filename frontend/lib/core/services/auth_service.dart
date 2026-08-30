@@ -7,6 +7,7 @@ class AuthService extends ChangeNotifier {
   User? _user;
   Map<String, dynamic>? _userProfile;
   bool _loading = true;
+  bool _profileLoaded = false;
 
   AuthService() {
     _initialize();
@@ -15,7 +16,7 @@ class AuthService extends ChangeNotifier {
   User? get user => _user;
   Map<String, dynamic>? get userProfile => _userProfile;
   bool get loading => _loading;
-  bool get isAuthenticated => _user != null;
+  bool get isAuthenticated => _user != null && _profileLoaded;
   String? get empresaId => _userProfile?['empresa_id'] as String?;
   String? get userName => _userProfile?['nome'] as String?;
   String? get userRole => _userProfile?['role'] as String?;
@@ -23,9 +24,15 @@ class AuthService extends ChangeNotifier {
 
   void _initialize() {
     _user = _supabase.auth.currentUser;
-    _loading = false;
-    if (_user != null) _loadProfile();
-    notifyListeners();
+    if (_user != null) {
+      _loadProfile().then((_) {
+        _loading = false;
+        notifyListeners();
+      });
+    } else {
+      _loading = false;
+      notifyListeners();
+    }
 
     _supabase.auth.onAuthStateChange.listen((event) {
       _user = event.session?.user;
@@ -33,19 +40,27 @@ class AuthService extends ChangeNotifier {
         _loadProfile();
       } else {
         _userProfile = null;
+        _profileLoaded = false;
+        notifyListeners();
       }
-      notifyListeners();
     });
   }
 
   Future<void> _loadProfile() async {
     if (_user == null) return;
-    final response = await _supabase.client
-        .from('usuarios')
-        .select()
-        .eq('id', _user!.id)
-        .single();
-    _userProfile = response;
+    try {
+      final response = await _supabase.client
+          .from('usuarios')
+          .select()
+          .eq('id', _user!.id)
+          .single();
+      _userProfile = response;
+      _profileLoaded = true;
+    } catch (e) {
+      _userProfile = null;
+      _profileLoaded = false;
+    }
+    notifyListeners();
   }
 
   Future<String?> signIn(String email, String password) async {
@@ -88,17 +103,22 @@ class AuthService extends ChangeNotifier {
     await _supabase.auth.signOut();
     _user = null;
     _userProfile = null;
+    _profileLoaded = false;
     notifyListeners();
   }
 
   Future<Map<String, dynamic>?> getActivePlan() async {
     if (empresaId == null) return null;
-    final response = await _supabase.client
-        .from('assinaturas')
-        .select('*, planos(*)')
-        .eq('empresa_id', empresaId!)
-        .eq('status', 'active')
-        .single();
-    return response as Map<String, dynamic>;
+    try {
+      final response = await _supabase.client
+          .from('assinaturas')
+          .select('*, planos(*)')
+          .eq('empresa_id', empresaId!)
+          .eq('status', 'active')
+          .single();
+      return response;
+    } catch (_) {
+      return null;
+    }
   }
 }

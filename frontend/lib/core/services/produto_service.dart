@@ -76,6 +76,24 @@ class ProdutoService extends ChangeNotifier {
     }
   }
 
+  Future<String?> atualizarCategoria(String id, Map<String, dynamic> data) async {
+    try {
+      await _supabase.client.from('categorias').update(data).eq('id', id);
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  Future<String?> deletarCategoria(String id) async {
+    try {
+      await _supabase.client.from('categorias').delete().eq('id', id);
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
   Future<List<Produto>> buscarProdutos(String empresaId, {String? query}) async {
     var request = _supabase.client
         .from('produtos')
@@ -84,7 +102,7 @@ class ProdutoService extends ChangeNotifier {
         .eq('ativo', true);
 
     if (query != null && query.isNotEmpty) {
-      request = request.ilike('nome', '%$query%');
+      request = request.or('nome.ilike.%$query%,codigo_barras.ilike.%$query%');
     }
 
     final response = await request.order('nome');

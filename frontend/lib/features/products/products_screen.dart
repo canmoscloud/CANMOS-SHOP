@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../core/models/produto.dart';
-import '../../core/models/categoria.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/produto_service.dart';
+import '../../core/services/subscription_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/services/supabase_service.dart';
 
@@ -51,7 +51,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.inventory_2, size: 64, color: AppTheme.textSecondary),
+                        const Icon(Icons.inventory_2, size: 64, color: AppTheme.textSecondary),
                         const SizedBox(height: 16),
                         const Text('Nenhum produto cadastrado'),
                         const SizedBox(height: 8),
@@ -78,7 +78,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
         leading: Container(
           width: 48, height: 48,
           decoration: BoxDecoration(
-            color: AppTheme.primary.withOpacity(0.1),
+            color: AppTheme.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(12),
           ),
           child: produto.imagemUrl != null
@@ -169,7 +169,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: categoriaId,
+                    initialValue: categoriaId,
                     decoration: const InputDecoration(labelText: 'Categoria'),
                     items: [
                       const DropdownMenuItem(value: null, child: Text('Sem categoria')),
@@ -208,7 +208,25 @@ class _ProductsScreenState extends State<ProductsScreen> {
                         final auth = context.read<AuthService>();
                         final service = context.read<ProdutoService>();
 
+                        // Verificar limite do plano ao criar novo produto
                         if (produto == null) {
+                          final limits = await context.read<SubscriptionService>().checkLimits(auth.empresaId!);
+                          if (limits['produtosOk'] == false) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Limite de produtos atingido (${limits['limiteProdutos']}). Faça upgrade para Premium!'),
+                                  backgroundColor: AppTheme.warning,
+                                  action: SnackBarAction(
+                                    label: 'Upgrade',
+                                    textColor: AppTheme.primary,
+                                    onPressed: () {},
+                                  ),
+                                ),
+                              );
+                            }
+                            return;
+                          }
                           await service.criarProduto(Produto(
                             id: '',
                             empresaId: auth.empresaId!,
@@ -230,6 +248,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                           });
                         }
 
+                        if (!ctx.mounted) return;
                         Navigator.pop(ctx);
                         await _load();
                       },
@@ -244,6 +263,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
                       child: OutlinedButton.icon(
                         onPressed: () async {
                           await context.read<ProdutoService>().deletarProduto(produto.id);
+                          if (!ctx.mounted) return;
                           Navigator.pop(ctx);
                           await _load();
                         },
@@ -265,14 +285,15 @@ class _ProductsScreenState extends State<ProductsScreen> {
   Future<String?> _pickImage() async {
     final picker = ImagePicker();
     final file = await picker.pickImage(source: ImageSource.gallery);
-    if (file == null) return null;
+    if (file == null || !mounted) return null;
 
     final auth = context.read<AuthService>();
     final supabase = SupabaseService();
     final bytes = await file.readAsBytes();
+
     final path = 'produtos/${auth.empresaId}/${DateTime.now().millisecondsSinceEpoch}.jpg';
-    await supabase.storage.from('produtos').uploadBinary(path, bytes);
-    final url = supabase.storage.from('produtos').getPublicUrl(path);
+    await supabase.storageFrom('produtos').uploadBinary(path, bytes);
+    final url = supabase.storageFrom('produtos').getPublicUrl(path);
     return url;
   }
 }

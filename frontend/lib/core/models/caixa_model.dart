@@ -6,11 +6,18 @@ class CaixaModel {
   final double? valorFechamento;
   final double? saldoEsperado;
   final double? saldoReal;
-  final double? diferenca;
+  final double? _diferenca;
   final String? observacao;
   final DateTime dataAbertura;
   final DateTime? dataFechamento;
   final String status;
+
+  double get diferenca {
+    if (saldoEsperado != null && saldoReal != null) {
+      return saldoReal! - saldoEsperado!;
+    }
+    return _diferenca ?? 0;
+  }
 
   CaixaModel({
     required this.id,
@@ -20,12 +27,14 @@ class CaixaModel {
     this.valorFechamento,
     this.saldoEsperado,
     this.saldoReal,
-    this.diferenca,
+    double? diferenca,
     this.observacao,
     DateTime? dataAbertura,
     this.dataFechamento,
     this.status = 'aberto',
-  }) : dataAbertura = dataAbertura ?? DateTime.now();
+  // ignore: prefer_initializing_formals
+  }) : _diferenca = diferenca,
+       dataAbertura = dataAbertura ?? DateTime.now();
 
   factory CaixaModel.fromJson(Map<String, dynamic> json) {
     return CaixaModel(

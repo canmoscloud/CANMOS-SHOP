@@ -39,24 +39,17 @@ serve(async (req) => {
 
     if (usuario.error) throw new Error("User not found");
 
+    const paymentMethodTypes = metodo === "cartao_credito" ? ["card"] : ["card"];
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(valor * 100),
       currency: "brl",
-      payment_method_types: metodo === "cartao_credito" ? ["card"] : ["card"],
+      payment_method_types: paymentMethodTypes,
       metadata: {
         venda_id,
         empresa_id: usuario.data.empresa_id,
         usuario_id: user.id,
         operador: usuario.data.nome,
       },
-    });
-
-    await supabase.from("pagamentos").insert({
-      venda_id,
-      forma_pagamento: metodo,
-      valor,
-      status: "pendente",
-      stripe_payment_intent_id: paymentIntent.id,
     });
 
     await supabase.from("logs").insert({
@@ -70,8 +63,8 @@ serve(async (req) => {
 
     return new Response(
       JSON.stringify({
-        clientSecret: paymentIntent.client_secret,
-        paymentIntentId: paymentIntent.id,
+        client_secret: paymentIntent.client_secret,
+        payment_intent_id: paymentIntent.id,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 },
     );
