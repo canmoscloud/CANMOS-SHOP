@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_stripe/flutter_stripe.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import '../utils/erro_servidor.dart';
 import 'supabase_service.dart';
 
 /// Orquestra os pagamentos de uma venda.
@@ -31,23 +31,6 @@ class PaymentService extends ChangeNotifier {
   void clearError() {
     _lastError = null;
     notifyListeners();
-  }
-
-  /// As Edge Functions devolvem `{"error": "..."}` com mensagens já prontas
-  /// para o operador ("Valor excede o restante da venda"). Sem desembrulhar,
-  /// o usuário veria o dump da FunctionException.
-  @visibleForTesting
-  static String mensagemDeErro(Object e) {
-    if (e is FunctionException) {
-      final details = e.details;
-      if (details is Map && details['error'] is String) {
-        return details['error'] as String;
-      }
-      if (details is String && details.isNotEmpty) return details;
-      return e.reasonPhrase ?? 'Falha ao chamar o servidor';
-    }
-    if (e is PostgrestException) return e.message;
-    return e.toString();
   }
 
   Future<Map<String, dynamic>> _invoke(
@@ -83,7 +66,7 @@ class PaymentService extends ChangeNotifier {
         'metodo': metodo,
       });
     } catch (e) {
-      final msg = PaymentService.mensagemDeErro(e);
+      final msg = mensagemDeErro(e);
       _setError(msg);
       throw Exception(msg);
     } finally {
@@ -99,7 +82,7 @@ class PaymentService extends ChangeNotifier {
         paymentIntentClientSecret: clientSecret,
       );
     } catch (e) {
-      final msg = PaymentService.mensagemDeErro(e);
+      final msg = mensagemDeErro(e);
       _setError(msg);
       throw Exception(msg);
     } finally {
@@ -121,7 +104,7 @@ class PaymentService extends ChangeNotifier {
         'valor': valor,
       });
     } catch (e) {
-      final msg = PaymentService.mensagemDeErro(e);
+      final msg = mensagemDeErro(e);
       _setError(msg);
       throw Exception(msg);
     } finally {
@@ -145,7 +128,7 @@ class PaymentService extends ChangeNotifier {
       );
       return Map<String, dynamic>.from(result as Map);
     } catch (e) {
-      final msg = PaymentService.mensagemDeErro(e);
+      final msg = mensagemDeErro(e);
       _setError(msg);
       throw Exception(msg);
     } finally {

@@ -1,10 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'package:canmos_shop/core/services/payment_service.dart';
+import 'package:canmos_shop/core/utils/erro_servidor.dart';
 
 void main() {
-  group('PaymentService.mensagemDeErro', () {
+  group('mensagemDeErro', () {
     test('extrai a mensagem do corpo {"error": ...} da Edge Function', () {
       const erro = FunctionException(
         status: 400,
@@ -12,14 +12,14 @@ void main() {
       );
 
       expect(
-        PaymentService.mensagemDeErro(erro),
+        mensagemDeErro(erro),
         'Valor 50.00 excede o restante da venda (30.00)',
       );
     });
 
     test('aceita details como string crua', () {
       const erro = FunctionException(status: 500, details: 'Boom');
-      expect(PaymentService.mensagemDeErro(erro), 'Boom');
+      expect(mensagemDeErro(erro), 'Boom');
     });
 
     test('cai no reasonPhrase quando details nao tem mensagem util', () {
@@ -28,12 +28,12 @@ void main() {
         details: {'outra_chave': 1},
         reasonPhrase: 'Service Unavailable',
       );
-      expect(PaymentService.mensagemDeErro(erro), 'Service Unavailable');
+      expect(mensagemDeErro(erro), 'Service Unavailable');
     });
 
     test('tem texto de fallback quando nao ha details nem reasonPhrase', () {
       const erro = FunctionException(status: 500);
-      expect(PaymentService.mensagemDeErro(erro), 'Falha ao chamar o servidor');
+      expect(mensagemDeErro(erro), 'Falha ao chamar o servidor');
     });
 
     test('propaga a mensagem de erro do Postgres (RAISE EXCEPTION da RPC)', () {
@@ -44,14 +44,14 @@ void main() {
       );
 
       expect(
-        PaymentService.mensagemDeErro(erro),
+        mensagemDeErro(erro),
         contains('Estorne antes de cancelar'),
       );
     });
 
     test('nao quebra com excecao generica', () {
       expect(
-        PaymentService.mensagemDeErro(Exception('qualquer coisa')),
+        mensagemDeErro(Exception('qualquer coisa')),
         contains('qualquer coisa'),
       );
     });

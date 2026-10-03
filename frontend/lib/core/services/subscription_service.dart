@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import '../utils/erro_servidor.dart';
 import 'supabase_service.dart';
 
 class SubscriptionService extends ChangeNotifier {
@@ -63,47 +64,42 @@ class SubscriptionService extends ChangeNotifier {
     };
   }
 
-  Future<String?> criarCheckoutSession({
+  /// Chama a stripe-subscription e devolve a URL.
+  ///
+  /// Antes estes métodos engoliam a exceção e retornavam `null`, então a tela
+  /// não distinguia "sem assinatura ativa" de "chave do Stripe não
+  /// configurada" ou falha de rede. Agora a mensagem do servidor sobe.
+  Future<String> _urlDaSessao(String action, Map<String, dynamic> extra) async {
+    try {
+      final token = await _supabase.getAccessToken();
+      final response = await _supabase.client.functions.invoke(
+        'stripe-subscription',
+        body: {'action': action, ...extra},
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      final data = response.data;
+      if (data == null) throw Exception('Resposta vazia do servidor');
+
+      final url = (data as Map)['url'] as String?;
+      if (url == null || url.isEmpty) {
+        throw Exception('O servidor não retornou a URL de pagamento');
+      }
+      return url;
+    } catch (e) {
+      throw Exception(mensagemDeErro(e));
+    }
+  }
+
+  Future<String> criarCheckoutSession({
     required String empresaId,
     required String priceId,
-  }) async {
-    try {
-      final token = await _supabase.getAccessToken();
-      final response = await _supabase.client.functions.invoke(
-        'stripe-subscription',
-        body: {
-          'action': 'create_checkout',
-          'empresa_id': empresaId,
-          'price_id': priceId,
-        },
-        headers: {'Authorization': 'Bearer $token'},
-      );
+  }) =>
+      _urlDaSessao('create_checkout', {
+        'empresa_id': empresaId,
+        'price_id': priceId,
+      });
 
-      if (response.data == null) throw Exception('Resposta vazia');
-      final data = response.data as Map<String, dynamic>;
-      return data['url'] as String?;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  Future<String?> abrirPortalAssinatura({required String empresaId}) async {
-    try {
-      final token = await _supabase.getAccessToken();
-      final response = await _supabase.client.functions.invoke(
-        'stripe-subscription',
-        body: {
-          'action': 'create_portal',
-          'empresa_id': empresaId,
-        },
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      if (response.data == null) throw Exception('Resposta vazia');
-      final data = response.data as Map<String, dynamic>;
-      return data['url'] as String?;
-    } catch (e) {
-      return null;
-    }
-  }
+  Future<String> abrirPortalAssinatura({required String empresaId}) =>
+      _urlDaSessao('create_portal', {'empresa_id': empresaId});
 }

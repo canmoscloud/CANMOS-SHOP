@@ -21,18 +21,25 @@ void main() async {
 
   Stripe.publishableKey = EnvConfig().stripePublishableKey;
 
-  runApp(const CanmosShopApp());
+  // Carrega o tema antes do primeiro frame: criar o service dentro do
+  // provider exibiria o tema claro por um instante antes de trocar.
+  final themeService = ThemeService();
+  await themeService.carregar();
+
+  runApp(CanmosShopApp(themeService: themeService));
 }
 
 class CanmosShopApp extends StatelessWidget {
-  const CanmosShopApp({super.key});
+  final ThemeService themeService;
+
+  const CanmosShopApp({super.key, required this.themeService});
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthService()),
-        ChangeNotifierProvider(create: (_) => ThemeService()),
+        ChangeNotifierProvider<ThemeService>.value(value: themeService),
         ChangeNotifierProvider(create: (_) => ProdutoService()),
         ChangeNotifierProvider(create: (_) => VendaService()),
         ChangeNotifierProvider(create: (_) => CaixaService()),

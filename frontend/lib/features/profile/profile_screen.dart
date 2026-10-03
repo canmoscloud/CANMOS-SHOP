@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/subscription_service.dart';
@@ -213,51 +214,60 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  void _avisar(String mensagem, Color cor) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(mensagem), backgroundColor: cor),
+    );
+  }
+
+  /// Abre a URL do Stripe no navegador do sistema.
+  ///
+  /// O checkout e o portal de cobrança só existem como página web; antes a
+  /// URL era obtida e descartada com um comentário "em um app real, abriria a
+  /// URL", de modo que ninguém conseguia assinar nem cancelar.
+  Future<void> _abrirNoNavegador(String url) async {
+    final uri = Uri.parse(url);
+    final abriu = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!abriu) {
+      _avisar('Não foi possível abrir o navegador', AppTheme.error);
+    }
+  }
+
   Future<void> _fazerUpgrade() async {
     final auth = context.read<AuthService>();
     if (auth.empresaId == null) return;
 
+    const priceId = AppConstants.stripePricePremiumMonthly;
+    if (priceId.isEmpty) {
+      // Checado antes de abrir o diálogo: no código anterior esse return
+      // acontecia com o spinner já na tela e barrierDismissible: false,
+      // deixando o app travado atrás dele.
+      _avisar(
+        'Configure STRIPE_PRICE_PREMIUM no build do app',
+        AppTheme.warning,
+      );
+      return;
+    }
+
+    final subService = context.read<SubscriptionService>();
+
     showDialog(
       context: context,
-      builder: (ctx) => const Center(child: CircularProgressIndicator()),
+      builder: (_) => const Center(child: CircularProgressIndicator()),
       barrierDismissible: false,
     );
 
-    final subService = context.read<SubscriptionService>();
-    const priceId = AppConstants.stripePricePremiumMonthly;
-    if (priceId.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Configure o ID do preço no Stripe Dashboard'),
-            backgroundColor: AppTheme.warning,
-          ),
-        );
-      }
-      return;
-    }
-    final url = await subService.criarCheckoutSession(
-      empresaId: auth.empresaId!,
-      priceId: priceId,
-    );
-
-    if (mounted) Navigator.pop(context);
-
-    if (url != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Redirecionando para pagamento...'),
-          backgroundColor: AppTheme.success,
-        ),
+    try {
+      final url = await subService.criarCheckoutSession(
+        empresaId: auth.empresaId!,
+        priceId: priceId,
       );
-      // Em um app real, abriria a URL no navegador
-    } else if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Erro ao criar sessão de pagamento'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
+      if (mounted) Navigator.pop(context);
+      await _abrirNoNavegador(url);
+    } catch (e) {
+      if (mounted) Navigator.pop(context);
+      _avisar('$e', AppTheme.error);
     }
   }
 
@@ -266,15 +276,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (auth.empresaId == null) return;
 
     final subService = context.read<SubscriptionService>();
-    final url = await subService.abrirPortalAssinatura(empresaId: auth.empresaId!);
 
-    if (url != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Abrindo portal de gerenciamento...'),
-          backgroundColor: AppTheme.success,
-        ),
+    try {
+      final url = await subService.abrirPortalAssinatura(
+        empresaId: auth.empresaId!,
       );
+      await _abrirNoNavegador(url);
+    } catch (e) {
+      _avisar('$e', AppTheme.error);
     }
   }
 }
