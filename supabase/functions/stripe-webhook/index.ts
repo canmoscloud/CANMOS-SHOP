@@ -13,6 +13,31 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 const endpointSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET")!;
 
+/// Fim do período da assinatura, em ISO.
+///
+/// `current_period_end` vive no objeto Subscription nas versões acacia da API
+/// e migrou para os itens da assinatura nas versões basil. O endpoint do
+/// webhook tem versão própria, configurada no painel do Stripe, que pode
+/// divergir da que o SDK fixa — ler as duas formas evita gravar
+/// `Invalid time value` em fim_periodo quando a versão do endpoint mudar.
+function fimDoPeriodo(subscription: Stripe.Subscription): string | null {
+  const noObjeto = (subscription as { current_period_end?: number })
+    .current_period_end;
+  const noItem = subscription.items?.data?.[0] as
+    | { current_period_end?: number }
+    | undefined;
+
+  const epoch = noObjeto ?? noItem?.current_period_end;
+  if (typeof epoch !== "number" || !Number.isFinite(epoch)) {
+    console.error(
+      "current_period_end ausente na subscription:",
+      subscription.id,
+    );
+    return null;
+  }
+  return new Date(epoch * 1000).toISOString();
+}
+
 serve(async (req) => {
   const signature = req.headers.get("stripe-signature");
   if (!signature) return new Response("Missing signature", { status: 400 });
@@ -216,7 +241,7 @@ serve(async (req) => {
             plano_id: premiumPlan.id,
             stripe_subscription_id: subscription.id,
             status,
-            fim_periodo: new Date(subscription.current_period_end * 1000).toISOString(),
+            fim_periodo: fimDoPeriodo(subscription),
           })
           .eq("id", existing.id);
 
@@ -230,7 +255,7 @@ serve(async (req) => {
           plano_id: premiumPlan.id,
           stripe_subscription_id: subscription.id,
           status,
-          fim_periodo: new Date(subscription.current_period_end * 1000).toISOString(),
+          fim_periodo: fimDoPeriodo(subscription),
         });
 
         if (error) {
