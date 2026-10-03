@@ -107,6 +107,11 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Plano ativo da empresa.
+  ///
+  /// Usa maybeSingle + order/limit: com `.single()`, duas assinaturas ativas
+  /// (duplicata de webhook, por exemplo) lançavam exceção e o catch devolvia
+  /// null, fazendo um cliente Premium aparecer como Free na tela de perfil.
   Future<Map<String, dynamic>?> getActivePlan() async {
     if (empresaId == null) return null;
     try {
@@ -115,7 +120,9 @@ class AuthService extends ChangeNotifier {
           .select('*, planos(*)')
           .eq('empresa_id', empresaId!)
           .eq('status', 'active')
-          .single();
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
       return response;
     } catch (_) {
       return null;

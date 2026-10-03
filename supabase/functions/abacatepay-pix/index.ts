@@ -28,13 +28,53 @@ serve(async (req) => {
     const { venda_id, valor } = await req.json();
     if (!venda_id || !valor) throw new Error("Missing required fields");
 
-    const usuario = await supabase
+    const valorNum = Number(valor);
+    if (!Number.isFinite(valorNum) || valorNum <= 0) {
+      throw new Error("Valor inválido");
+    }
+
+    const { data: usuario, error: usuarioError } = await supabase
       .from("usuarios")
       .select("empresa_id, nome")
       .eq("id", user.id)
       .single();
 
-    if (usuario.error) throw new Error("User not found");
+    if (usuarioError || !usuario) throw new Error("User not found");
+
+    // service_role ignora RLS: posse da venda é verificada aqui.
+    const { data: venda, error: vendaError } = await supabase
+      .from("vendas")
+      .select("id, empresa_id, valor_total, desconto, status")
+      .eq("id", venda_id)
+      .maybeSingle();
+
+    if (vendaError) throw vendaError;
+    if (!venda) throw new Error("Venda não encontrada");
+    if (venda.empresa_id !== usuario.empresa_id) {
+      throw new Error("Venda não pertence à sua empresa");
+    }
+    if (venda.status !== "pendente") {
+      throw new Error(`Venda já está ${venda.status} e não aceita novo pagamento`);
+    }
+
+    const { data: pagamentosExistentes, error: pagError } = await supabase
+      .from("pagamentos")
+      .select("valor, status")
+      .eq("venda_id", venda_id)
+      .in("status", ["aprovado", "pendente"]);
+
+    if (pagError) throw pagError;
+
+    const liquido = Number(venda.valor_total) - Number(venda.desconto);
+    const reservado = (pagamentosExistentes ?? [])
+      .reduce((soma, p) => soma + Number(p.valor), 0);
+    const restante = Number((liquido - reservado).toFixed(2));
+
+    if (valorNum > restante) {
+      throw new Error(
+        `Valor ${valorNum.toFixed(2)} excede o restante da venda (${restante.toFixed(2)})`,
+      );
+    }
 
     const pixResponse = await fetch(`${ABACATEPAY_API_URL}/cobranca/create`, {
       method: "POST",
@@ -43,8 +83,8 @@ serve(async (req) => {
         "Authorization": `Bearer ${ABACATEPAY_API_KEY}`,
       },
       body: JSON.stringify({
-        valor: valor,
-        descricao: `Venda ${venda_id} - ${usuario.data.nome}`,
+        valor: valorNum,
+        descricao: `Venda ${venda_id} - ${usuario.nome}`,
         expires_in: 3600,
       }),
     });
@@ -56,20 +96,43 @@ serve(async (req) => {
 
     const pixData = await pixResponse.json();
 
+    if (!pixData?.id) {
+      throw new Error("AbacatePay não retornou id da cobrança");
+    }
+
+    // Pagamento nasce 'pendente'; o abacatepay-webhook promove para 'aprovado'
+    // quando a AbacatePay confirmar o PIX.
+    const { data: pagamento, error: insertError } = await supabase
+      .from("pagamentos")
+      .insert({
+        venda_id,
+        forma_pagamento: "pix",
+        valor: valorNum,
+        status: "pendente",
+        abacatepay_cobranca_id: pixData.id,
+        pix_qr_code: pixData.qr_code ?? null,
+        pix_qr_code_texto: pixData.qr_code_text ?? null,
+      })
+      .select("id")
+      .single();
+
+    if (insertError) throw insertError;
+
     await supabase.from("logs").insert({
-      empresa_id: usuario.data.empresa_id,
+      empresa_id: usuario.empresa_id,
       usuario_id: user.id,
       acao: "pix_criado",
       entidade: "vendas",
       entidade_id: venda_id,
-      detalhes: { cobranca_id: pixData.id, valor },
+      detalhes: { cobranca_id: pixData.id, valor: valorNum },
     });
 
     return new Response(
       JSON.stringify({
         cobrancaId: pixData.id,
-        qrCode: pixData.qr_code,
-        qrCodeText: pixData.qr_code_text,
+        pagamentoId: pagamento.id,
+        qrCode: pixData.qr_code ?? null,
+        qrCodeText: pixData.qr_code_text ?? null,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 },
     );

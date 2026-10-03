@@ -39,11 +39,26 @@ class VendaService extends ChangeNotifier {
     return (response as List).map((e) => Venda.fromJson(e)).toList();
   }
 
-  Future<void> cancelarVenda(String vendaId) async {
-    await _supabase.client
+  /// Busca uma venda específica. Evita carregar o histórico inteiro só para
+  /// montar o recibo da venda que acabou de sair.
+  Future<Venda?> buscarVendaPorId(String vendaId) async {
+    final response = await _supabase.client
         .from('vendas')
-        .update({'status': 'cancelada'})
-        .eq('id', vendaId);
+        .select('*, itens_venda(*, produtos(*)), pagamentos(*), usuarios(nome)')
+        .eq('id', vendaId)
+        .maybeSingle();
+
+    if (response == null) return null;
+    return Venda.fromJson(response);
+  }
+
+  /// Cancela via RPC: o cliente não tem mais UPDATE em `vendas`. O servidor
+  /// recusa cancelar venda com pagamento aprovado (exigiria estorno) e
+  /// cancela junto os pagamentos que ainda estavam pendentes.
+  Future<void> cancelarVenda(String vendaId) async {
+    await _supabase.client.rpc('cancelar_venda', params: {
+      'p_venda_id': vendaId,
+    });
     notifyListeners();
   }
 

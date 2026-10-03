@@ -61,10 +61,18 @@ class _CashierScreenState extends State<CashierScreen> {
     );
   }
 
+  String _moeda(Object? valor) {
+    final n = valor is num ? valor.toDouble() : double.tryParse('$valor') ?? 0;
+    return 'R\$ ${n.toStringAsFixed(2).replaceAll('.', ',')}';
+  }
+
+  /// O operador informa só o que contou na gaveta. O saldo esperado é somado
+  /// no servidor a partir dos pagamentos em dinheiro — antes este diálogo
+  /// pedia o esperado digitado, o que permitia encobrir quebra de caixa.
   void _fecharCaixa() {
-    final saldoEsperadoCtrl = TextEditingController();
     final saldoRealCtrl = TextEditingController();
     final caixaService = context.read<CaixaService>();
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -72,37 +80,117 @@ class _CashierScreenState extends State<CashierScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              controller: saldoEsperadoCtrl,
-              decoration: const InputDecoration(labelText: 'Saldo Esperado (R\$)'),
-              keyboardType: TextInputType.number,
+            const Text(
+              'Conte o dinheiro na gaveta e informe o total. '
+              'O sistema calcula o esperado e aponta a diferença.',
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
             TextField(
               controller: saldoRealCtrl,
-              decoration: const InputDecoration(labelText: 'Saldo Real (R\$)'),
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Valor contado na gaveta (R\$)',
+              ),
               keyboardType: TextInputType.number,
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
           ElevatedButton(
             onPressed: () async {
-              final error = await caixaService.fecharCaixa(
-                caixaId: caixaService.caixaAtual!.id,
-                saldoEsperado: double.tryParse(saldoEsperadoCtrl.text) ?? 0,
-                saldoReal: double.tryParse(saldoRealCtrl.text) ?? 0,
+              final saldoReal = double.tryParse(
+                saldoRealCtrl.text.replaceAll(',', '.'),
               );
-              if (!context.mounted) return;
-              Navigator.pop(ctx);
-              if (error != null && mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(error), backgroundColor: AppTheme.error),
+
+              if (saldoReal == null || saldoReal < 0) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  const SnackBar(content: Text('Informe um valor válido')),
                 );
+                return;
+              }
+
+              Navigator.pop(ctx);
+              try {
+                final resultado = await caixaService.fecharCaixa(
+                  caixaId: caixaService.caixaAtual!.id,
+                  saldoReal: saldoReal,
+                );
+                if (mounted) _mostrarConferencia(resultado);
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('$e'),
+                      backgroundColor: AppTheme.error,
+                    ),
+                  );
+                }
               }
             },
             child: const Text('Fechar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _mostrarConferencia(Map<String, dynamic> r) {
+    final diferenca = r['diferenca'] is num
+        ? (r['diferenca'] as num).toDouble()
+        : double.tryParse('${r['diferenca']}') ?? 0;
+
+    final bate = diferenca.abs() < 0.01;
+    final cor = bate
+        ? AppTheme.success
+        : (diferenca < 0 ? AppTheme.error : AppTheme.warning);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Conferência de Caixa'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _linha('Abertura', _moeda(r['valor_abertura'])),
+            _linha('Vendas em dinheiro', _moeda(r['total_dinheiro'])),
+            const Divider(),
+            _linha('Esperado', _moeda(r['saldo_esperado'])),
+            _linha('Contado', _moeda(r['saldo_real'])),
+            const Divider(),
+            _linha(
+              bate
+                  ? 'Caixa confere'
+                  : (diferenca < 0 ? 'Falta' : 'Sobra'),
+              _moeda(diferenca.abs()),
+              cor: cor,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _linha(String label, String valor, {Color? cor}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label),
+          Text(
+            valor,
+            style: TextStyle(fontWeight: FontWeight.bold, color: cor),
           ),
         ],
       ),

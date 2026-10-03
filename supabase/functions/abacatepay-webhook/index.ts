@@ -115,23 +115,41 @@ serve(async (req) => {
         throw updatePaymentError;
       }
 
-      // Update venda status
-      const { error: updateVendaError } = await supabase
+      // Confirma a venda só quando o total aprovado cobre o líquido: numa
+      // venda dividida (ex. metade dinheiro, metade PIX) o PIX aprovado
+      // sozinho não quita a venda.
+      const { data: venda, error: vendaError } = await supabase
         .from("vendas")
-        .update({ status: "confirmada" })
-        .eq("id", pagamento.venda_id);
-
-      if (updateVendaError) {
-        console.error("Error updating venda:", updateVendaError.message);
-        throw updateVendaError;
-      }
-
-      // Log the successful payment
-      const { data: venda } = await supabase
-        .from("vendas")
-        .select("empresa_id")
+        .select("empresa_id, valor_total, desconto, status")
         .eq("id", pagamento.venda_id)
-        .single();
+        .maybeSingle();
+
+      if (vendaError) throw vendaError;
+
+      if (venda && venda.status === "pendente") {
+        const { data: aprovados, error: aprovadosError } = await supabase
+          .from("pagamentos")
+          .select("valor")
+          .eq("venda_id", pagamento.venda_id)
+          .eq("status", "aprovado");
+
+        if (aprovadosError) throw aprovadosError;
+
+        const liquido = Number(venda.valor_total) - Number(venda.desconto);
+        const pago = (aprovados ?? []).reduce((s, p) => s + Number(p.valor), 0);
+
+        if (pago >= liquido) {
+          const { error: updateVendaError } = await supabase
+            .from("vendas")
+            .update({ status: "confirmada" })
+            .eq("id", pagamento.venda_id);
+
+          if (updateVendaError) {
+            console.error("Error updating venda:", updateVendaError.message);
+            throw updateVendaError;
+          }
+        }
+      }
 
       if (venda) {
         await supabase.from("logs").insert({

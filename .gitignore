@@ -32,6 +32,11 @@ Thumbs.db
 .env.local
 .env.production
 
+# Anotacoes locais com credenciais — nunca versionar
+chaves.txt
+*.secrets
+*credenciais*
+
 # Dependencies
 frontend/.pub-cache/
 frontend/pubspec.lock

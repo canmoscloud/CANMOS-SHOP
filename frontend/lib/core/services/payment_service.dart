@@ -1,18 +1,22 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_stripe/flutter_stripe.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'supabase_service.dart';
 
+/// Orquestra os pagamentos de uma venda.
+///
+/// Nenhum método aqui grava em `pagamentos` ou confirma a venda: a partir da
+/// migration 006 o cliente só lê essas tabelas. Dinheiro vai por RPC
+/// `SECURITY DEFINER`; cartão e PIX são registrados pelas Edge Functions como
+/// `pendente` e promovidos a `aprovado` pelos webhooks dos provedores. Assim o
+/// app não tem como declarar um pagamento aprovado sem que o dinheiro exista.
 class PaymentService extends ChangeNotifier {
   final SupabaseService _supabase = SupabaseService();
   bool _processing = false;
   String? _lastError;
-  String? _pixQrCode;
-  String? _pixQrCodeText;
 
   bool get processing => _processing;
   String? get lastError => _lastError;
-  String? get pixQrCode => _pixQrCode;
-  String? get pixQrCodeText => _pixQrCodeText;
 
   void _setProcessing(bool value) {
     _processing = value;
@@ -29,6 +33,42 @@ class PaymentService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// As Edge Functions devolvem `{"error": "..."}` com mensagens já prontas
+  /// para o operador ("Valor excede o restante da venda"). Sem desembrulhar,
+  /// o usuário veria o dump da FunctionException.
+  @visibleForTesting
+  static String mensagemDeErro(Object e) {
+    if (e is FunctionException) {
+      final details = e.details;
+      if (details is Map && details['error'] is String) {
+        return details['error'] as String;
+      }
+      if (details is String && details.isNotEmpty) return details;
+      return e.reasonPhrase ?? 'Falha ao chamar o servidor';
+    }
+    if (e is PostgrestException) return e.message;
+    return e.toString();
+  }
+
+  Future<Map<String, dynamic>> _invoke(
+    String funcao,
+    Map<String, dynamic> body,
+  ) async {
+    final token = await _supabase.getAccessToken();
+    final response = await _supabase.client.functions.invoke(
+      funcao,
+      body: body,
+      headers: {'Authorization': 'Bearer $token'},
+    );
+
+    final data = response.data;
+    if (data == null) throw Exception('Resposta vazia do servidor');
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Cria a PaymentIntent no Stripe. A Edge Function valida que a venda é da
+  /// empresa do usuário e que o valor não passa do que falta pagar, e grava o
+  /// pagamento como `pendente`.
   Future<Map<String, dynamic>> processarCartao({
     required String vendaId,
     required double valor,
@@ -37,32 +77,21 @@ class PaymentService extends ChangeNotifier {
     _setProcessing(true);
     _setError(null);
     try {
-      final token = await _supabase.getAccessToken();
-      final response = await _supabase.client.functions.invoke(
-        'stripe-payment',
-        body: {
-          'venda_id': vendaId,
-          'valor': valor,
-          'metodo': metodo,
-        },
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      if (response.data == null) {
-        throw Exception('Resposta vazia do servidor');
-      }
-      return response.data as Map<String, dynamic>;
+      return await _invoke('stripe-payment', {
+        'venda_id': vendaId,
+        'valor': valor,
+        'metodo': metodo,
+      });
     } catch (e) {
-      _setError(e.toString());
-      rethrow;
+      final msg = PaymentService.mensagemDeErro(e);
+      _setError(msg);
+      throw Exception(msg);
     } finally {
       _setProcessing(false);
     }
   }
 
-  Future<void> confirmarPagamentoCartao({
-    required String clientSecret,
-  }) async {
+  Future<void> confirmarPagamentoCartao({required String clientSecret}) async {
     _setProcessing(true);
     _setError(null);
     try {
@@ -70,13 +99,16 @@ class PaymentService extends ChangeNotifier {
         paymentIntentClientSecret: clientSecret,
       );
     } catch (e) {
-      _setError(e.toString());
-      rethrow;
+      final msg = PaymentService.mensagemDeErro(e);
+      _setError(msg);
+      throw Exception(msg);
     } finally {
       _setProcessing(false);
     }
   }
 
+  /// Cria a cobrança PIX. Devolve `cobrancaId`, `pagamentoId`, `qrCode` e
+  /// `qrCodeText` — o pagamento fica `pendente` até o webhook da AbacatePay.
   Future<Map<String, dynamic>> gerarPix({
     required String vendaId,
     required double valor,
@@ -84,110 +116,72 @@ class PaymentService extends ChangeNotifier {
     _setProcessing(true);
     _setError(null);
     try {
-      final token = await _supabase.getAccessToken();
-      final response = await _supabase.client.functions.invoke(
-        'abacatepay-pix',
-        body: {
-          'venda_id': vendaId,
-          'valor': valor,
-        },
-        headers: {'Authorization': 'Bearer $token'},
-      );
-
-      if (response.data == null) {
-        throw Exception('Resposta vazia do servidor');
-      }
-      final data = response.data as Map<String, dynamic>;
-      _pixQrCode = data['qrCode'] as String?;
-      _pixQrCodeText = data['qrCodeText'] as String?;
-      notifyListeners();
-      return data;
+      return await _invoke('abacatepay-pix', {
+        'venda_id': vendaId,
+        'valor': valor,
+      });
     } catch (e) {
-      _setError(e.toString());
-      rethrow;
+      final msg = PaymentService.mensagemDeErro(e);
+      _setError(msg);
+      throw Exception(msg);
     } finally {
       _setProcessing(false);
     }
   }
 
-  Future<void> registrarPagamentoDinheiro({
+  /// Dinheiro é aprovado na hora — o operador recebeu a cédula. Mesmo assim
+  /// passa por RPC, que valida empresa e valor e confirma a venda apenas
+  /// quando a soma dos pagamentos cobre o total.
+  Future<Map<String, dynamic>> registrarPagamentoDinheiro({
     required String vendaId,
     required double valor,
   }) async {
+    _setProcessing(true);
     _setError(null);
     try {
-      await _supabase.client.from('pagamentos').insert({
-        'venda_id': vendaId,
-        'forma_pagamento': 'dinheiro',
-        'valor': valor,
-        'status': 'aprovado',
-        'processado_em': DateTime.now().toIso8601String(),
-      });
-
-      await _supabase.client
-          .from('vendas')
-          .update({'status': 'confirmada'})
-          .eq('id', vendaId);
+      final result = await _supabase.client.rpc(
+        'registrar_pagamento_dinheiro',
+        params: {'p_venda_id': vendaId, 'p_valor': valor},
+      );
+      return Map<String, dynamic>.from(result as Map);
     } catch (e) {
-      _setError(e.toString());
-      rethrow;
+      final msg = PaymentService.mensagemDeErro(e);
+      _setError(msg);
+      throw Exception(msg);
+    } finally {
+      _setProcessing(false);
     }
   }
 
-  Future<void> registrarPagamentoCartao({
-    required String vendaId,
-    required double valor,
-    required String metodo,
-    required String stripePaymentIntentId,
-  }) async {
-    _setError(null);
-    try {
-      await _supabase.client.from('pagamentos').insert({
-        'venda_id': vendaId,
-        'forma_pagamento': metodo,
-        'valor': valor,
-        'status': 'aprovado',
-        'stripe_payment_intent_id': stripePaymentIntentId,
-        'processado_em': DateTime.now().toIso8601String(),
-      });
-
-      await _supabase.client
-          .from('vendas')
-          .update({'status': 'confirmada'})
-          .eq('id', vendaId);
-    } catch (e) {
-      _setError(e.toString());
-      rethrow;
-    }
+  /// Status atual de um pagamento, para acompanhar PIX e cartão enquanto o
+  /// webhook do provedor não chega.
+  Future<String?> consultarStatusPagamento(String pagamentoId) async {
+    final response = await _supabase.client
+        .from('pagamentos')
+        .select('status')
+        .eq('id', pagamentoId)
+        .maybeSingle();
+    return response?['status'] as String?;
   }
 
-  Future<void> registrarPagamentoPix({
-    required String vendaId,
-    required double valor,
-    required String cobrancaId,
-    String? qrCode,
-    String? qrCodeTexto,
+  /// Aguarda a confirmação do provedor por polling.
+  ///
+  /// Retorna o status final (`aprovado`, `recusado`, `cancelado`) ou
+  /// `pendente` se estourar o tempo — nesse caso a venda continua pendente e
+  /// o webhook ainda pode confirmá-la depois.
+  Future<String> aguardarConfirmacao(
+    String pagamentoId, {
+    Duration intervalo = const Duration(seconds: 3),
+    Duration limite = const Duration(minutes: 5),
   }) async {
-    _setError(null);
-    try {
-      await _supabase.client.from('pagamentos').insert({
-        'venda_id': vendaId,
-        'forma_pagamento': 'pix',
-        'valor': valor,
-        'status': 'pendente',
-        'abacatepay_cobranca_id': cobrancaId,
-        'pix_qr_code': qrCode,
-        'pix_qr_code_texto': qrCodeTexto,
-        'processado_em': DateTime.now().toIso8601String(),
-      });
+    final fim = DateTime.now().add(limite);
 
-      await _supabase.client
-          .from('vendas')
-          .update({'status': 'pendente'})
-          .eq('id', vendaId);
-    } catch (e) {
-      _setError(e.toString());
-      rethrow;
+    while (DateTime.now().isBefore(fim)) {
+      await Future<void>.delayed(intervalo);
+      final status = await consultarStatusPagamento(pagamentoId);
+      if (status != null && status != 'pendente') return status;
     }
+
+    return 'pendente';
   }
 }

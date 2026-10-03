@@ -57,6 +57,16 @@ serve(async (req) => {
         });
       }
 
+      if (!pagamentoAtual) {
+        // A linha é criada por stripe-payment antes de confirmar a intenção.
+        // Sem ela, algo cobrou fora do fluxo do app — não inventa pagamento.
+        console.error("Nenhum pagamento registrado para o intent:", pi.id);
+        return new Response(JSON.stringify({ received: true, skipped: true }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        });
+      }
+
       const { error: updatePaymentError } = await supabase
         .from("pagamentos")
         .update({ status: "aprovado", processado_em: new Date().toISOString() })
@@ -67,14 +77,40 @@ serve(async (req) => {
         throw updatePaymentError;
       }
 
-      const { error: updateVendaError } = await supabase
+      // Confirma a venda só quando o total aprovado cobre o líquido: numa
+      // venda dividida (ex. metade dinheiro, metade cartão) o primeiro
+      // pagamento aprovado não quita a venda.
+      const { data: venda, error: vendaError } = await supabase
         .from("vendas")
-        .update({ status: "confirmada" })
-        .eq("id", vendaId);
+        .select("valor_total, desconto, status")
+        .eq("id", vendaId)
+        .maybeSingle();
 
-      if (updateVendaError) {
-        console.error("Error updating venda:", updateVendaError.message);
-        throw updateVendaError;
+      if (vendaError) throw vendaError;
+
+      if (venda && venda.status === "pendente") {
+        const { data: aprovados, error: aprovadosError } = await supabase
+          .from("pagamentos")
+          .select("valor")
+          .eq("venda_id", vendaId)
+          .eq("status", "aprovado");
+
+        if (aprovadosError) throw aprovadosError;
+
+        const liquido = Number(venda.valor_total) - Number(venda.desconto);
+        const pago = (aprovados ?? []).reduce((s, p) => s + Number(p.valor), 0);
+
+        if (pago >= liquido) {
+          const { error: updateVendaError } = await supabase
+            .from("vendas")
+            .update({ status: "confirmada" })
+            .eq("id", vendaId);
+
+          if (updateVendaError) {
+            console.error("Error updating venda:", updateVendaError.message);
+            throw updateVendaError;
+          }
+        }
       }
 
       const { error: logError } = await supabase.from("logs").insert({

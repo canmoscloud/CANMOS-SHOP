@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/models/produto.dart';
-import '../../core/services/auth_service.dart';
 import '../../core/services/venda_service.dart';
 import '../../core/services/payment_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../receipt/receipt_screen.dart';
+import 'pix_qr_dialog.dart';
 
 class MetodoPagamento {
   String tipo;
@@ -291,87 +291,152 @@ class _PaymentScreenState extends State<PaymentScreen> {
     return _vendaId!;
   }
 
+  void _aviso(String mensagem, Color cor) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(mensagem), backgroundColor: cor),
+    );
+  }
+
   Future<void> _processarPagamentos() async {
     setState(() => _processing = true);
     try {
       await _criarVenda();
-
       if (!mounted) return;
-      final paymentService = context.read<PaymentService>();
 
+      // Um método que não se confirma interrompe a sequência: seguir para o
+      // próximo deixaria a venda com pagamentos parciais sem o operador saber.
       for (final metodo in _metodosSelecionados) {
-        if (metodo.tipo == 'dinheiro') {
-          await paymentService.registrarPagamentoDinheiro(
-            vendaId: _vendaId!,
-            valor: metodo.valor,
-          );
-        } else if (metodo.tipo == 'cartao_credito' || metodo.tipo == 'cartao_debito') {
-          final result = await paymentService.processarCartao(
-            vendaId: _vendaId!,
-            valor: metodo.valor,
-            metodo: metodo.tipo,
-          );
-
-          final clientSecret = result['client_secret'] as String?;
-          final paymentIntentId = result['payment_intent_id'] as String?;
-
-          if (clientSecret != null && clientSecret.isNotEmpty) {
-            await paymentService.confirmarPagamentoCartao(
-              clientSecret: clientSecret,
-            );
-          }
-
-          await paymentService.registrarPagamentoCartao(
-            vendaId: _vendaId!,
-            valor: metodo.valor,
-            metodo: metodo.tipo,
-            stripePaymentIntentId: paymentIntentId ?? '',
-          );
-        } else if (metodo.tipo == 'pix') {
-          final pixData = await paymentService.gerarPix(
-            vendaId: _vendaId!,
-            valor: metodo.valor,
-          );
-
-          await paymentService.registrarPagamentoPix(
-            vendaId: _vendaId!,
-            valor: metodo.valor,
-            cobrancaId: pixData['cobrancaId'] as String? ?? '',
-            qrCode: pixData['qrCode'] as String?,
-            qrCodeTexto: pixData['qrCodeText'] as String?,
-          );
-        }
+        final confirmado = await _processarMetodo(metodo);
+        if (!confirmado) return;
+        if (!mounted) return;
       }
 
-      if (mounted) {
-        _irParaRecibo();
-      }
+      await _finalizar();
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro: $e'), backgroundColor: AppTheme.error),
-        );
-      }
+      _aviso('Erro: $e', AppTheme.error);
     } finally {
       if (mounted) setState(() => _processing = false);
     }
   }
 
-  void _irParaRecibo() async {
-    try {
-      final vendaService = context.read<VendaService>();
-      final vendas = await vendaService.listarVendas(
-        context.read<AuthService>().empresaId!,
-      );
-      final venda = vendas.firstWhere((v) => v.id == _vendaId);
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => ReceiptScreen(venda: venda)),
+  /// Processa um método e informa se o pagamento ficou confirmado.
+  /// Quem aprova é sempre o servidor — dinheiro pela RPC, cartão e PIX pelos
+  /// webhooks do provedor.
+  Future<bool> _processarMetodo(MetodoPagamento metodo) async {
+    final paymentService = context.read<PaymentService>();
+
+    switch (metodo.tipo) {
+      case 'dinheiro':
+        await paymentService.registrarPagamentoDinheiro(
+          vendaId: _vendaId!,
+          valor: metodo.valor,
         );
-      }
-    } catch (_) {
-      if (mounted) Navigator.pop(context);
+        return true;
+
+      case 'cartao_credito':
+      case 'cartao_debito':
+        final result = await paymentService.processarCartao(
+          vendaId: _vendaId!,
+          valor: metodo.valor,
+          metodo: metodo.tipo,
+        );
+
+        final clientSecret = result['client_secret'] as String?;
+        final pagamentoId = result['pagamento_id'] as String?;
+
+        // Antes isto era `if (clientSecret != null)` e, quando vinha vazio, a
+        // confirmação era pulada e a venda marcada como paga do mesmo jeito.
+        if (clientSecret == null || clientSecret.isEmpty) {
+          throw Exception(
+            'O servidor não retornou client_secret: a cobrança não foi iniciada',
+          );
+        }
+
+        await paymentService.confirmarPagamentoCartao(clientSecret: clientSecret);
+
+        if (pagamentoId == null) return true;
+
+        final statusCartao = await paymentService.aguardarConfirmacao(
+          pagamentoId,
+          limite: const Duration(seconds: 30),
+        );
+
+        if (statusCartao == 'aprovado') return true;
+
+        if (statusCartao == 'pendente') {
+          _aviso(
+            'Cartão enviado, aguardando confirmação do Stripe. '
+            'A venda será confirmada automaticamente.',
+            AppTheme.warning,
+          );
+        } else {
+          _aviso('Cartão $statusCartao', AppTheme.error);
+        }
+        return false;
+
+      case 'pix':
+        final pix = await paymentService.gerarPix(
+          vendaId: _vendaId!,
+          valor: metodo.valor,
+        );
+
+        final pagamentoPixId = pix['pagamentoId'] as String?;
+        if (pagamentoPixId == null) {
+          throw Exception('O servidor não retornou o pagamento do PIX');
+        }
+
+        if (!mounted) return false;
+        final statusPix = await showDialog<String>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => PixQrDialog(
+            pagamentoId: pagamentoPixId,
+            valor: metodo.valor,
+            qrCodeText: pix['qrCodeText'] as String?,
+            qrCodeImagem: pix['qrCode'] as String?,
+          ),
+        );
+
+        if (statusPix == 'aprovado') return true;
+
+        _aviso(
+          statusPix == 'pendente' || statusPix == null
+              ? 'PIX ainda não confirmado. A venda segue pendente.'
+              : 'PIX $statusPix',
+          AppTheme.warning,
+        );
+        return false;
+
+      default:
+        throw Exception('Método de pagamento desconhecido: ${metodo.tipo}');
     }
+  }
+
+  /// Só emite recibo de venda efetivamente confirmada pelo servidor.
+  Future<void> _finalizar() async {
+    final vendaService = context.read<VendaService>();
+    final venda = await vendaService.buscarVendaPorId(_vendaId!);
+
+    if (!mounted) return;
+
+    if (venda == null) {
+      Navigator.pop(context);
+      return;
+    }
+
+    if (venda.status != 'confirmada') {
+      _aviso(
+        'Venda registrada como pendente, aguardando confirmação do pagamento.',
+        AppTheme.warning,
+      );
+      Navigator.pop(context);
+      return;
+    }
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => ReceiptScreen(venda: venda)),
+    );
   }
 }

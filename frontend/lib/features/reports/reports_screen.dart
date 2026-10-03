@@ -227,14 +227,31 @@ class _ReportsScreenState extends State<ReportsScreen> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Não')),
           ElevatedButton(
             onPressed: () async {
-              await context.read<VendaService>().cancelarVenda(venda.id);
-              if (!ctx.mounted) return;
+              final service = context.read<VendaService>();
               Navigator.pop(ctx);
-              await _carregar();
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Venda cancelada'), backgroundColor: AppTheme.success),
-                );
+
+              // O servidor recusa cancelar venda com pagamento aprovado —
+              // isso exigiria estorno. A mensagem precisa chegar ao operador.
+              try {
+                await service.cancelarVenda(venda.id);
+                await _carregar();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Venda cancelada'),
+                      backgroundColor: AppTheme.success,
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('$e'),
+                      backgroundColor: AppTheme.error,
+                    ),
+                  );
+                }
               }
             },
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),

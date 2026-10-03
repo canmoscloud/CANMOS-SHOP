@@ -13,30 +13,46 @@ class ProdutoService extends ChangeNotifier {
   List<Categoria> get categorias => _categorias;
   bool get loading => _loading;
 
+  String? _lastError;
+  String? get lastError => _lastError;
+
   Future<void> loadProdutos(String empresaId) async {
     _loading = true;
+    _lastError = null;
     notifyListeners();
 
-    final response = await _supabase.client
-        .from('produtos')
-        .select('*, categorias(*)')
-        .eq('empresa_id', empresaId)
-        .eq('ativo', true)
-        .order('nome');
+    try {
+      final response = await _supabase.client
+          .from('produtos')
+          .select('*, categorias(*)')
+          .eq('empresa_id', empresaId)
+          .eq('ativo', true)
+          .order('nome');
 
-    _produtos = (response as List).map((e) => Produto.fromJson(e)).toList();
-    _loading = false;
-    notifyListeners();
+      _produtos = (response as List).map((e) => Produto.fromJson(e)).toList();
+    } catch (e) {
+      // Sem o try/finally, uma falha de rede deixava _loading em true para
+      // sempre e a tela ficava travada no spinner.
+      _lastError = e.toString();
+    } finally {
+      _loading = false;
+      notifyListeners();
+    }
   }
 
   Future<void> loadCategorias(String empresaId) async {
-    final response = await _supabase.client
-        .from('categorias')
-        .select()
-        .eq('empresa_id', empresaId)
-        .order('ordem');
+    try {
+      final response = await _supabase.client
+          .from('categorias')
+          .select()
+          .eq('empresa_id', empresaId)
+          .order('ordem');
 
-    _categorias = (response as List).map((e) => Categoria.fromJson(e)).toList();
+      _categorias = (response as List).map((e) => Categoria.fromJson(e)).toList();
+      _lastError = null;
+    } catch (e) {
+      _lastError = e.toString();
+    }
     notifyListeners();
   }
 
@@ -102,7 +118,13 @@ class ProdutoService extends ChangeNotifier {
         .eq('ativo', true);
 
     if (query != null && query.isNotEmpty) {
-      request = request.or('nome.ilike.%$query%,codigo_barras.ilike.%$query%');
+      // O valor precisa ir entre aspas: sem isso, uma vírgula no termo
+      // ("Coca, lata") é lida como separador de condições e quebra a sintaxe
+      // do filtro do PostgREST.
+      final termo = query.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+      request = request.or(
+        'nome.ilike."%$termo%",codigo_barras.ilike."%$termo%"',
+      );
     }
 
     final response = await request.order('nome');
